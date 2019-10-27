@@ -18,112 +18,109 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-
 // Usage: var queue : TypedQueue<Float32Array> = new TypedQueue(Float32Array);
 // There might be a cleaner way to do this; pull requests are welcome!
 
+import { Int, Size } from './Types';
 
-// aliases
-type int = number;
-type double = number;
-type size_t = number;
-type float = number;
-
-interface TypedArray extends ArrayLike<number> {
-	set<T extends TypedArray>(array: T, offset?: number): void;
-
-	// Not quite right, but this is more for a sanity check
-	subarray<T extends TypedArray>(begin?: number, end?: number): T;
-}
+type TypedArray =
+  | Int8Array
+  | Uint8Array
+  | Int16Array
+  | Uint16Array
+  | Int32Array
+  | Uint32Array
+  | Uint8ClampedArray
+  | Float32Array
+  | Float64Array;
 
 interface TypedArrayConstructor<T> {
-	new (size: int): T;
+  new (size: Int): T;
 }
 
 // Queue using typed arrays
 class TypedQueue<T extends TypedArray> {
-	private buffer: T;
-	private typedArrayConstructor: TypedArrayConstructor<T>;
+  private buffer: T;
+  private readonly typedArrayConstructor: TypedArrayConstructor<T>;
 
-	private begin: int = 0; // index of first item in mem
-	private end: int = 0; // 1 + index of last item in mem
+  private begin: Int = 0; // index of first item in mem
+  private end: Int = 0; // 1 + index of last item in mem
 
+  constructor(c: TypedArrayConstructor<T>) {
+    this.typedArrayConstructor = c;
+    this.buffer = new c(16384);
+  }
 
-	constructor(c: TypedArrayConstructor<T>) {
-		this.typedArrayConstructor = c;
-		this.buffer = new c(16384);
-	}
+  public clear() {
+    this.begin = this.end = 0;
+  }
 
-	public clear() {
-		this.begin = this.end = 0;
-	}
+  public reserve(n: Int): Int {
+    // returns index to start writing
+    if (this.begin == this.end) {
+      this.clear();
+    }
 
-	public reserve(n: int) : int { // returns index to start writing
-		if (this.begin == this.end) {
-			this.clear();
-		}
+    while (true) {
+      // If we can fit the additional data, do it
+      if (this.end + n < this.buffer.length) {
+        const idx = this.end;
+        this.end += n;
+        return idx;
+      }
 
-		while(1) {
-			// If we can fit the additional data, do it
-			if (this.end + n < this.buffer.length) {
-				var idx = this.end;
-				this.end += n;
-				return idx;
-			}
+      // Shift to beginning of array
+      if (this.begin > 16384) {
+        this.buffer.set(this.buffer.subarray(this.begin, this.end));
+        this.end -= this.begin;
+        this.begin = 0;
+        continue;
+      }
 
-			// Shift to beginning of array
-			if (this.begin > 16384) {
-				this.buffer.set(this.buffer.subarray(this.begin, this.end));
-				this.end -= this.begin
-				this.begin = 0;
-				continue;
-			}
+      // Resize array if nothing else works
+      const newbuf = new this.typedArrayConstructor(this.buffer.length + n);
+      newbuf.set(this.buffer);
+      this.buffer = newbuf;
+    }
+  }
 
-			// Resize array if nothing else works
-			var newbuf = new this.typedArrayConstructor(this.buffer.length + n);
-			newbuf.set(this.buffer);
-			this.buffer = newbuf;
-		}
-	}
+  public write(data: T, n: Int): void {
+    const offset = this.reserve(n);
+    this.buffer.set(data.subarray(0, n), offset);
+  }
 
-	public write(data: T, n: int) : void {
-		var offset = this.reserve(n);
-		this.buffer.set(data.subarray(0, n), offset);
-	}
+  public writePtr(n: Int): T {
+    const offset = this.reserve(n);
+    return this.buffer.subarray(offset, offset + n) as T;
+  }
 
-	public write_ptr(n: int) : T {
-		var offset = this.reserve(n);
-		return <T>this.buffer.subarray(offset, offset + n);
-	}
+  public read(data: T | null, n: Int): void {
+    if (n + this.begin > this.end) {
+      console.error('Read out of bounds', n, this.end, this.begin);
+    }
 
-	public read(data: T, n: int) : void {
-		if (n + this.begin > this.end) {
-			console.error("Read out of bounds", n, this.end, this.begin);
-		}
+    if (data != null) {
+      data.set(this.buffer.subarray(this.begin, this.begin + n));
+    }
 
+    this.begin += n;
+  }
 
-		if (data != null) {
-			data.set(this.buffer.subarray(this.begin, this.begin + n));
-		}
+  public readPtr(start: Int, end: Int = -1): T {
+    if (end > this.occupancy()) {
+      console.error('Read Pointer out of bounds', end);
+    }
 
-		this.begin += n;
-	}
+    if (end < 0) {
+      end = this.occupancy();
+    }
 
-	public read_ptr(start: int, end: int = -1) : T {
-		if (end > this.occupancy()) {
-			console.error("Read Pointer out of bounds", end);
-		}
+    return this.buffer.subarray(this.begin + start, this.begin + end) as T;
+  }
 
-		if (end < 0) {
-			end = this.occupancy();
-		}
-
-		return <T>this.buffer.subarray(this.begin + start, this.begin + end);
-	}
-
-	public occupancy() : size_t {
-		return this.end - this.begin
-	}
+  public occupancy(): Size {
+    return this.end - this.begin;
+  }
 }
 
-export = TypedQueue;
+export default TypedQueue;

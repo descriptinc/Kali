@@ -18,282 +18,319 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-import TypedQueue = require("./TypedQueue");
- 
-
-// aliases
-type int = number;
-type double = number;
-type size_t = number;
-type float = number;
+import TypedQueue from './TypedQueue';
+import { Size, Double, Float, Int } from './Types';
 
 // The c code used implicit conversion between floats and ints.
 // Since JS stores everything as floats, we need to manually truncate when we
-// set a float to an int. A good way to find all these spots is to use the 
+// set a float to an int. A good way to find all these spots is to use the
 // `-Wconversion` flag when compiling the c code.
-function handleInt(i: int) {
-	return Math.floor(i);
+function handleInt(i: Int) {
+  return Math.floor(i);
 }
 
 // NOTE: JS numbers can't handle 64 bit unsigned ints (without BigInteger or something)
 // This is mostly used for sample counters, so it probably doesn't need a 64 bit uint
-type uint64_t = number;
+type UInt64 = number;
 
+class Tempo {
+  public isInitialized: boolean = false;
+  public sampleRate: Size = 44100;
+  public channels: Size = 0;
+  public quickSearch: boolean = false;
+  public factor: Double = 0;
+  public search: Size = 0;
+  public segment: Size = 0;
+  public overlap: Size = 0;
 
-class tempo_t {
-	public is_initialized: boolean = false;
-	public sample_rate: size_t = 44100;
-	public channels: size_t = 0;
-	public quick_search: boolean = false;
-	public factor: double = 0;
-	public search: size_t = 0;
-	public segment: size_t = 0;
-	public overlap: size_t = 0;
+  public processSize: Size = 0;
 
-	public process_size: size_t = 0;
+  /* Buffers */
+  public overlapBuf: Float32Array | undefined; // float pointer
 
-	/* Buffers */
-	public input_fifo: TypedQueue<Float32Array>;
-	public overlap_buf: Float32Array; // float pointer
-	public output_fifo: TypedQueue<Float32Array>;
+  /* Counters */
+  public samplesIn: UInt64 = 0;
+  public samplesOut: UInt64 = 0;
+  public segmentsTotal: UInt64 = 0;
 
-	/* Counters */
-	public samples_in: uint64_t = 0;
-	public samples_out: uint64_t = 0;
-	public segments_total: uint64_t = 0;
-	public skip_total: uint64_t = 0;
+  constructor(
+    public inputFifo: TypedQueue<Float32Array>,
+    public outputFifo: TypedQueue<Float32Array>,
+  ) {}
 }
 
 class Kali {
+  private readonly t: Tempo;
 
-	private t: tempo_t;
+  /* Waveform Similarity by least squares; works across multi-channels */
 
-	/* Waveform Similarity by least squares; works across multi-channels */
-	
-	// TODO: Optimize by caching?
-	private difference(a: Float32Array, b: Float32Array, length: size_t): float {
-		var diff : float = 0;
-		var i: size_t = 0;
+  // TODO: Optimize by caching?
+  private static difference(
+    a: Float32Array,
+    b: Float32Array,
+    length: Size,
+  ): Float {
+    let diff: Float = 0;
+    for (let i = 0; i < length; i++) {
+      diff += Math.pow(a[i] - b[i], 2);
+    }
 
-		for (var i = 0; i < length; i++) {
-			diff += Math.pow(a[i] - b[i], 2);
-		}
+    return diff;
+  }
 
-		return diff;
-	}
+  /* Find where the two segments are most alike over the overlap period. */
+  private static tempoBestOverlapPosition(
+    t: Tempo,
+    newWin: Float32Array,
+  ): Size {
+    const f = t.overlapBuf;
+    if (!f) {
+      throw new Error('tempo_t not initialized');
+    }
 
-	/* Find where the two segments are most alike over the overlap period. */
-	private tempo_best_overlap_position(t: tempo_t, new_win: Float32Array) : size_t {
-		var f: Float32Array = t.overlap_buf;
-		
-		var j: size_t;
-		var best_pos: size_t;
-		
-		// NOTE: changed to zero-fill shift
-		var prev_best_pos: size_t = (t.search + 1) >>> 1;
-		var step: size_t = 64;
-		var i: size_t = best_pos = t.quick_search ? prev_best_pos : 0;
-		
-		var diff: float;
-		var least_diff: float = this.difference(new_win.subarray(t.channels * i), f, t.channels * t.overlap);
-		var k: int = 0;
+    let j: Size;
+    let bestPos: Size;
 
-		// TODO: implement new quickseek algorithm from SoundTouch
-		if (t.quick_search) {
-			do { // hierarchial search
-				for (k = -1; k <= 1; k += 2) {
-					for (j = 1; j < 4 || step == 64; j++) {
-						i = prev_best_pos + k * j * step;
-						if (i < 0 || i >= t.search) {
-							break;
-						}
+    // NOTE: changed to zero-fill shift
+    let prevBestPos: Size = (t.search + 1) >>> 1;
+    let step: Size = 64;
+    let i: Size = (bestPos = t.quickSearch ? prevBestPos : 0);
 
-						diff = this.difference(new_win.subarray(t.channels * i), f, t.channels * t.overlap);
-						if (diff < least_diff) {
-							least_diff = diff;
-							best_pos = i;
-						}
-					}
-				}
+    let diff: Float;
+    let leastDiff: Float = Kali.difference(
+      newWin.subarray(t.channels * i),
+      f,
+      t.channels * t.overlap,
+    );
+    let k: Int = 0;
 
-				prev_best_pos = best_pos;
-			} while (step >>>= 2) // NOTE: changed to zero-fill shift
-		} else { 
-			for (i = 1; i < t.search; i++) { // linear search
-				diff = this.difference(new_win.subarray(t.channels * i), f, t.channels * t.overlap);
-				if (diff < least_diff) {
-					least_diff = diff;
-					best_pos = i;
-				}
-			}
-		}
+    // TODO: implement new quickseek algorithm from SoundTouch
+    if (t.quickSearch) {
+      do {
+        // hierarchial search
+        for (k = -1; k <= 1; k += 2) {
+          for (j = 1; j < 4 || step == 64; j++) {
+            i = prevBestPos + k * j * step;
+            if (i < 0 || i >= t.search) {
+              break;
+            }
 
-		return best_pos;
-	}
+            diff = Kali.difference(
+              newWin.subarray(t.channels * i),
+              f,
+              t.channels * t.overlap,
+            );
+            if (diff < leastDiff) {
+              leastDiff = diff;
+              bestPos = i;
+            }
+          }
+        }
 
+        prevBestPos = bestPos;
+      } while ((step >>>= 2)); // NOTE: changed to zero-fill shift
+    } else {
+      for (i = 1; i < t.search; i++) {
+        // linear search
+        diff = Kali.difference(
+          newWin.subarray(t.channels * i),
+          f,
+          t.channels * t.overlap,
+        );
+        if (diff < leastDiff) {
+          leastDiff = diff;
+          bestPos = i;
+        }
+      }
+    }
 
-	private tempo_overlap(t: tempo_t, in1: Float32Array, in2: Float32Array, output: Float32Array) : void {
-		var i: size_t = 0;
-		var j: size_t = 0;
-		var k: size_t = 0;
-		var fade_step: float = 1.0 / t.overlap;
+    return bestPos;
+  }
 
-		for (i = 0; i < t.overlap; i++) {
-			var fade_in: float = fade_step * i;
-			var fade_out: float = 1.0 - fade_in;
-			for (j = 0; j < t.channels; j++ , k++) {
-				output[k] = in1[k] * fade_out + in2[k] * fade_in;
-			}
-		}
-	}
+  private static tempoOverlap(
+    t: Tempo,
+    in1: Float32Array,
+    in2: Float32Array,
+    output: Float32Array,
+  ): void {
+    let k: Size = 0;
+    const fadeStep: Float = 1.0 / t.overlap;
 
-	public process() : void {
-		var t = this.t;
-		while (t.input_fifo.occupancy() >= t.process_size) {
-			var skip: size_t;
-			var offset: size_t;
+    for (let i = 0; i < t.overlap; i++) {
+      const fadeIn: Float = fadeStep * i;
+      const fadeOut: Float = 1.0 - fadeIn;
+      for (let j = 0; j < t.channels; j++, k++) {
+        output[k] = in1[k] * fadeOut + in2[k] * fadeIn;
+      }
+    }
+  }
 
-			/* Copy or overlap the first bit to the output */
-			if (!t.segments_total) {
-				offset = t.search / 2;
-				t.output_fifo.write(t.input_fifo.read_ptr(t.channels * offset, t.overlap), t.overlap);
-			} else {
-				offset = this.tempo_best_overlap_position(t, t.input_fifo.read_ptr(0));
-				this.tempo_overlap(t,
-					t.overlap_buf,
-					t.input_fifo.read_ptr(t.channels * offset),
-					t.output_fifo.write_ptr(t.overlap));
-			}
+  public process(): void {
+    const t = this.t;
+    while (t.inputFifo.occupancy() >= t.processSize) {
+      let offset: Size;
 
-			/* Copy the middle bit to the output */
-			t.output_fifo.write(t.input_fifo.read_ptr(t.channels * (offset + t.overlap)),
-				t.segment - 2 * t.overlap);
+      /* Copy or overlap the first bit to the output */
+      if (!t.segmentsTotal) {
+        offset = t.search / 2;
+        t.outputFifo.write(
+          t.inputFifo.readPtr(t.channels * offset, t.overlap),
+          t.overlap,
+        );
+      } else {
+        offset = Kali.tempoBestOverlapPosition(t, t.inputFifo.readPtr(0));
+        if (!t.overlapBuf) {
+          throw new Error('t not initialized');
+        }
+        Kali.tempoOverlap(
+          t,
+          t.overlapBuf,
+          t.inputFifo.readPtr(t.channels * offset),
+          t.outputFifo.writePtr(t.overlap),
+        );
+      }
 
-			/* Copy the end bit to overlap_buf ready to be mixed with
-		     * the beginning of the next segment. */
-			var numToCopy = t.channels * t.overlap;
-			t.overlap_buf.set(
-				t.input_fifo.read_ptr(t.channels * (offset + t.segment - t.overlap)).subarray(0, numToCopy))
+      /* Copy the middle bit to the output */
+      t.outputFifo.write(
+        t.inputFifo.readPtr(t.channels * (offset + t.overlap)),
+        t.segment - 2 * t.overlap,
+      );
 
-			/* Advance through the input stream */
-			t.segments_total++;
-			skip = handleInt(t.factor * (t.segment - t.overlap) + 0.5);
-			t.input_fifo.read(null, skip);
+      /* Copy the end bit to overlap_buf ready to be mixed with
+       * the beginning of the next segment. */
+      const numToCopy = t.channels * t.overlap;
+      if (!t.overlapBuf) {
+        throw new Error('t not initialized');
+      }
+      t.overlapBuf.set(
+        t.inputFifo
+          .readPtr(t.channels * (offset + t.segment - t.overlap))
+          .subarray(0, numToCopy),
+      );
 
-		}
-	}
-	
-	public input(samples: Float32Array, n :size_t = null, offset = 0) : void {
-		if (n == null) {
-			n = samples.length;
-		}
+      /* Advance through the input stream */
+      t.segmentsTotal++;
+      const skip = handleInt(t.factor * (t.segment - t.overlap) + 0.5);
+      t.inputFifo.read(null, skip);
+    }
+  }
 
-		var t = this.t;
-		t.samples_in += n;
-		t.input_fifo.write(samples, n);
-	}
+  public input(samples: Float32Array, n: Size | null = null): void {
+    if (n == null) {
+      n = samples.length;
+    }
 
-	public output(samples: Float32Array) : size_t {
-		var t = this.t;
-		var n = Math.min(samples.length, t.output_fifo.occupancy());
-		t.samples_out += n;
-		t.output_fifo.read(samples, n);
-		return n;
-	}
+    const t = this.t;
+    t.samplesIn += n;
+    t.inputFifo.write(samples, n);
+  }
 
-	public flush(): void {
-		var t = this.t;
-		var samples_out: uint64_t = handleInt(t.samples_in / t.factor + 0.5);
-		var remaining: size_t = samples_out > t.samples_out ? (samples_out - t.samples_out) : 0;
-		var buff: Float32Array = new Float32Array(128 * t.channels);
+  public output(samples: Float32Array): Size {
+    const t = this.t;
+    const n = Math.min(samples.length, t.outputFifo.occupancy());
+    t.samplesOut += n;
+    t.outputFifo.read(samples, n);
+    return n;
+  }
 
-		if (remaining > 0) {
-			while(t.output_fifo.occupancy() < remaining) {
-				this.input(buff, 128);
-				this.process();
-			}
-			// TODO: trim buffer here
-			// Otherwise potential bug if we reuse after a flush
-			t.samples_in = 0;
-		}
-	}
+  public flush(): void {
+    const t = this.t;
+    const samplesOut: UInt64 = handleInt(t.samplesIn / t.factor + 0.5);
+    const remaining: Size =
+      samplesOut > t.samplesOut ? samplesOut - t.samplesOut : 0;
+    const buff: Float32Array = new Float32Array(128 * t.channels);
 
-	static segments_ms : double[] = [82, 82, 35, 20];
-	static segments_pow: double[] = [0, 1, .33, 1];
-	static overlaps_div: double[] = [6.833, 7, 2.5, 2];
-	static searches_div: double[] = [5.587, 6, 2.14, 2];
+    if (remaining > 0) {
+      while (t.outputFifo.occupancy() < remaining) {
+        this.input(buff, 128);
+        this.process();
+      }
+      // TODO: trim buffer here
+      // Otherwise potential bug if we reuse after a flush
+      t.samplesIn = 0;
+    }
+  }
 
-	public setup(sample_rate: double,
-				 factor: double, // Factor to change tempo by
-				 quick_search: boolean = false,
-				 segment_ms: double = null,
-				 search_ms: double = null,
-				 overlap_ms: double = null): void {
+  static segmentsMs: Double[] = [82, 82, 35, 20];
+  static segmentsPow: Double[] = [0, 1, 0.33, 1];
+  static overlapsDiv: Double[] = [6.833, 7, 2.5, 2];
+  static searchesDiv: Double[] = [5.587, 6, 2.14, 2];
 
-		var profile = 1;
-		var t = this.t;
-		t.sample_rate = sample_rate;
+  public setup(
+    sampleRate: Double,
+    factor: Double, // Factor to change tempo by
+    quickSearch: boolean = false,
+    segmentMs: Double | null = null,
+    searchMs: Double | null = null,
+    overlapMs: Double | null = null,
+  ): void {
+    const profile = 1;
+    const t = this.t;
+    t.sampleRate = sampleRate;
 
-		if (segment_ms == null) {
-			segment_ms = Math.max(10, Kali.segments_ms[profile] / Math.max(Math.pow(factor, Kali.segments_pow[profile]), 1));
-		}
+    if (segmentMs == null) {
+      segmentMs = Math.max(
+        10,
+        Kali.segmentsMs[profile] /
+          Math.max(Math.pow(factor, Kali.segmentsPow[profile]), 1),
+      );
+    }
 
-		if (search_ms == null) {
-			search_ms = segment_ms / Kali.searches_div[profile];
-		}
+    if (searchMs == null) {
+      searchMs = segmentMs / Kali.searchesDiv[profile];
+    }
 
-		if (overlap_ms == null) {
-			overlap_ms = segment_ms / Kali.overlaps_div[profile];
-		}
+    if (overlapMs == null) {
+      overlapMs = segmentMs / Kali.overlapsDiv[profile];
+    }
 
-		var max_skip: size_t;
-		t.quick_search = quick_search;
-		t.factor = factor;
-		t.segment = handleInt(sample_rate * segment_ms / 1000 + .5);
-		t.search = handleInt(sample_rate * search_ms / 1000 + .5);
-		t.overlap = Math.max(handleInt(sample_rate * overlap_ms / 1000 + 4.5), 16);
-		if (t.overlap * 2 > t.segment) {
-			t.overlap -= 8;
-		}
+    t.quickSearch = quickSearch;
+    t.factor = factor;
+    t.segment = handleInt((sampleRate * segmentMs) / 1000 + 0.5);
+    t.search = handleInt((sampleRate * searchMs) / 1000 + 0.5);
+    t.overlap = Math.max(handleInt((sampleRate * overlapMs) / 1000 + 4.5), 16);
+    if (t.overlap * 2 > t.segment) {
+      t.overlap -= 8;
+    }
 
-		if (!t.is_initialized) {
-			t.overlap_buf = new Float32Array(t.overlap * t.channels);
-		} else {
-			var new_overlap = new Float32Array(t.overlap * t.channels);
-			var start = 0;
-			if (t.overlap * t.channels < t.overlap_buf.length) {
-				start = t.overlap_buf.length - (t.overlap * t.channels);
-			}
+    if (!t.isInitialized) {
+      t.overlapBuf = new Float32Array(t.overlap * t.channels);
+    } else {
+      const newOverlap = new Float32Array(t.overlap * t.channels);
+      let start = 0;
+      if (!t.overlapBuf) {
+        throw new Error('t not initialized');
+      }
+      if (t.overlap * t.channels < t.overlapBuf.length) {
+        start = t.overlapBuf.length - t.overlap * t.channels;
+      }
 
-			new_overlap.set(t.overlap_buf.subarray(start, t.overlap_buf.length));
-			t.overlap_buf = new_overlap;
-		}
+      newOverlap.set(t.overlapBuf.subarray(start, t.overlapBuf.length));
+      t.overlapBuf = newOverlap;
+    }
 
-		max_skip = handleInt(Math.ceil(factor * (t.segment - t.overlap)));
-		t.process_size = Math.max(max_skip + t.overlap, t.segment) + t.search;
-		if (!t.is_initialized) {
-			t.input_fifo.reserve(handleInt(t.search / 2));
-		}
+    const maxSkip = handleInt(Math.ceil(factor * (t.segment - t.overlap)));
+    t.processSize = Math.max(maxSkip + t.overlap, t.segment) + t.search;
+    if (!t.isInitialized) {
+      t.inputFifo.reserve(handleInt(t.search / 2));
+    }
 
-		t.is_initialized = true;
-	}
+    t.isInitialized = true;
+  }
 
-	public setTempo(factor : double) {
-		var t = this.t;
-		this.setup(t.sample_rate, factor, t.quick_search);
-	}
+  public setTempo(factor: Double) {
+    const t = this.t;
+    this.setup(t.sampleRate, factor, t.quickSearch);
+  }
 
-	constructor(channels: size_t) {
-		var t: tempo_t = new tempo_t();
-		t.channels = channels;
-		t.input_fifo = new TypedQueue(Float32Array);
-		t.output_fifo = new TypedQueue(Float32Array);
-		this.t = t;
-	}
+  constructor(channels: Size) {
+    const t: Tempo = new Tempo(
+      new TypedQueue(Float32Array),
+      new TypedQueue(Float32Array),
+    );
+    t.channels = channels;
+    this.t = t;
+  }
 }
 
-if (window) {
-	window['Kali'] = Kali
-}
-
-export = Kali;
+export default Kali;

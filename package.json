@@ -1,10 +1,55 @@
 {
-	"name": "kali",
-	"version": "0.0.1",
-	"author": "Vivek Panyam <viv.panyam@gmail.com>",
-	"dependencies": {
-		"webpack": "latest",
-		"ts-loader": "latest",
-		"typescript": "latest"
-	}
+  "name": "@descript/kali",
+  "version": "0.0.2",
+  "license": "LGPL",
+  "author": "Vivek Panyam <viv.panyam@gmail.com>",
+  "main": "./dist/index.js",
+  "module": "./dist/index.esm.js",
+  "typings": "./dist/index.d.ts",
+  "scripts": {
+    "test": "jest --watch",
+    "test-ci": "jest --coverage",
+    "build": "rollup -c",
+    "lint": "eslint src/**/*.ts",
+    "prepublishOnly": "rm -rf dist/ && npm run build"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "pretty-quick --staged"
+    }
+  },
+  "engines": {
+    "node": ">=6"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/descriptinc/Kali.git"
+  },
+  "files": [
+    "dist/**/*",
+    "src/**/*"
+  ],
+  "devDependencies": {
+    "@types/jest": "^24.0.19",
+    "@typescript-eslint/eslint-plugin": "^2.5.0",
+    "@typescript-eslint/parser": "^2.5.0",
+    "codecov": "^3.6.1",
+    "eslint": "^6.5.1",
+    "eslint-config-prettier": "^6.4.0",
+    "husky": "^3.0.9",
+    "jest": "^24.9.0",
+    "prettier": "1.18.2",
+    "pretty-quick": "^2.0.0",
+    "rollup": "^1.25.2",
+    "rollup-plugin-commonjs": "^10.1.0",
+    "rollup-plugin-node-resolve": "^5.2.0",
+    "rollup-plugin-typescript2": "^0.24.3",
+    "ts-jest": "^24.1.0",
+    "tslint-config-prettier": "1.18.0",
+    "typescript": "^3.6.4"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node"
+  }
 }
