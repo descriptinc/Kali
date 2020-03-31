@@ -1,6 +1,6 @@
 {
   "name": "@descript/kali",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "license": "LGPL",
   "author": "Vivek Panyam <viv.panyam@gmail.com>",
   "main": "./dist/index.js",
