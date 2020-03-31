@@ -257,8 +257,14 @@ class Kali {
   static searchesDiv: Double[] = [5.587, 6, 2.14, 2];
 
   public reset() {
-    this.t.inputFifo.clear();
-    this.t.outputFifo.clear();
+    const t = this.t;
+    t.inputFifo.clear();
+    t.outputFifo.clear();
+    t.segmentsTotal = 0;
+    t.samplesOut = 0;
+    if (t.overlapBuf) {
+      t.overlapBuf.fill(0);
+    }
   }
 
   public setup(
