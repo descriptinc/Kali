@@ -256,6 +256,11 @@ class Kali {
   static overlapsDiv: Double[] = [6.833, 7, 2.5, 2];
   static searchesDiv: Double[] = [5.587, 6, 2.14, 2];
 
+  public reset() {
+    this.t.inputFifo.clear();
+    this.t.outputFifo.clear();
+  }
+
   public setup(
     sampleRate: Double,
     factor: Double, // Factor to change tempo by
@@ -265,6 +270,7 @@ class Kali {
     overlapMs: Double | null = null,
   ): void {
     const profile = 1;
+    this.reset();
     const t = this.t;
     t.sampleRate = sampleRate;
 
