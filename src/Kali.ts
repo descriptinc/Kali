@@ -323,10 +323,7 @@ class Kali {
 
     const maxSkip = handleInt(Math.ceil(factor * (t.segment - t.overlap)));
     t.processSize = Math.max(maxSkip + t.overlap, t.segment) + t.search;
-    if (!t.isInitialized) {
-      t.inputFifo.reserve(handleInt(t.search / 2));
-    }
-
+    t.inputFifo.reserve(handleInt(t.search / 2));
     t.isInitialized = true;
   }
 
