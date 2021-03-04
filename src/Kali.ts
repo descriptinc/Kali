@@ -261,6 +261,7 @@ class Kali {
     t.inputFifo.clear();
     t.outputFifo.clear();
     t.segmentsTotal = 0;
+    t.samplesIn = 0;
     t.samplesOut = 0;
     if (t.overlapBuf) {
       t.overlapBuf.fill(0);
